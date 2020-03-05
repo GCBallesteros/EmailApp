@@ -1,16 +1,23 @@
+"""Send emails upon HTTP request.
+
+Depends on the presence of an appropiate Key Vault to store passwords and
+text file based DB stored in the storage account.
+
+Author: Guillem Ballesteros
+"""
+
+import json
 import logging
 import os
-import json
-
+import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate
-import smtplib
 
 import azure.functions as func
-from azure.storage.fileshare import ShareFileClient
-from azure.keyvault.secrets import SecretClient
 from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+from azure.storage.fileshare import ShareFileClient
 
 
 def get_param(request, param_name):
@@ -31,17 +38,72 @@ def get_param(request, param_name):
 
 
 class SenderDB:
+    """Setup our email accounts "DB", it is really just a JSON file.
+
+    The sender details are obtained from a text file stored in an Azure
+    File Share. To avoid having plain text password the text based DB stores
+    a reference to a Key vault Secret.
+
+    The connection to the Key Vault is established using the following
+    environment defined variables:
+    - AZURE_CLIENT_ID
+    - AZURE_CLIENT_SECRET
+    - AZURE_TENANT_ID
+    The client ID and client secret are specific to an App registered in your
+    active directory.
+
+    The KEY_VAULT_URI is also expected to be found on the environment
+    variables.
+
+    The DB is a JSON file with a list of dicts that include:
+    - user: The name which we will refer the account with in the requests.
+    - email: Email of the senders.
+    - host: Host for the SMTP server.
+    - port: Port to the SMTP server.
+    - keyvault_secret: The name of the secret stored in the KeyVault which has
+        the password for the account.
+    """
+
     def __init__(self, conn_str, share_name, file_path):
+        """Initialize the sender class.
+
+        Retrieves the DB from the file share. All the parameters of __init__
+        are there to retrieve the DB.
+
+        Parameters
+        ----------
+        conn_str: str
+            Connection strin to the storage account containing the DB. Every
+            Function App has an storage account associated with it. It's
+            connection strin is stored in the default env variable
+            AzureWebJobsStorage.
+        share_name: str
+            Name of the share where the DB is kept.
+        file_path: str
+            Path within the File Share to the DB.
+        """
+
         file_client = ShareFileClient.from_connection_string(
-            conn_str=conn_str,
-            share_name=share_name,
-            file_path=file_path,
+            conn_str=conn_str, share_name=share_name, file_path=file_path,
         )
 
         data = file_client.download_file()
         self.email_db = json.loads(data.readall())
 
     def get_sender(self, user):
+        """Retrieve the details for a user from the DB.
+
+        If we try to retrieve a user defined multiple times it raises an
+        error since we have ambiguous details.
+
+        Passwords are retrieved from a KeyVault.
+
+        Parameters
+        ----------
+        user: str
+            User associated with the email account used to deliver the email.
+        """
+
         sender_details = [x for x in self.email_db if x["user"] == user]
         if len(sender_details) == 0:
             logging.info("Sender user not found in DB.")
@@ -53,7 +115,9 @@ class SenderDB:
             sender_details = sender_details[0]
 
         credential = DefaultAzureCredential()
-        client = SecretClient(vault_url=environ["KEY_VAULT_URI"], credential=credential)
+        client = SecretClient(
+            vault_url=os.environ["KEY_VAULT_URI"], credential=credential
+        )
         secret = client.get_secret(sender_details["keyvault_secret"])
         sender_details["password"] = secret.value
 
@@ -61,6 +125,14 @@ class SenderDB:
 
 
 def parse_request(req):
+    """Extract all the relevant parameters from the incoming request.
+
+    The parameters extracted are:
+    - user (mandatory)
+    - subject (optional default:empty)
+    - recipients (mandatory): Comma separated list of recipiients.
+    - body (optional default: empty)
+    """
     param_names = ["user", "subject", "recipients", "body"]
     email_parameters = {k: get_param(req, k) for k in param_names}
     logging.info(f"The incoming parameters are: {email_parameters}")
@@ -85,7 +157,22 @@ def parse_request(req):
 
 
 class EmailDeliverer:
+    """Configure and deliver emails."""
+
     def __init__(self, host, port, email, password):
+        """Init email deliverer.
+
+        Parameters
+        ----------
+        host: str
+            Host for SMTP server.
+        port: int
+            SMTP port
+        email: str
+            Email messages are being delivered from.
+        password: str
+            Password to the email account.
+        """
         self.host = host
         self.port = port
         self.password = password
@@ -113,7 +200,7 @@ def main(req):
     email_parameters = parse_request(req)
 
     sender_details = SenderDB(
-        conn_str=environ["AzureWebJobsStorage"],
+        conn_str=os.environ["AzureWebJobsStorage"],
         share_name="email-app",
         file_path="emails.json",
     ).get_sender(email_parameters["user"])
