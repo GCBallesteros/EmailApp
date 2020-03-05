@@ -38,14 +38,8 @@ class SenderDB:
             file_path=file_path,
         )
 
-        with open("temp_emails.json", "wb") as file_handle:
-            data = file_client.download_file()
-            data.readinto(file_handle)
-
-        with open("temp_emails.json", "r") as file_handle:
-            data = file_handle.read()
-            logging.info(data)
-            self.email_db = json.loads(data)
+        data = file_client.download_file()
+        self.email_db = json.loads(data.readall())
 
     def get_sender(self, user):
         sender_details = [x for x in self.email_db if x["user"] == user]
@@ -59,7 +53,7 @@ class SenderDB:
             sender_details = sender_details[0]
 
         credential = DefaultAzureCredential()
-        client = SecretClient(vault_url=os.environ["KEY_VAULT_URI"], credential=credential)
+        client = SecretClient(vault_url=environ["KEY_VAULT_URI"], credential=credential)
         secret = client.get_secret(sender_details["keyvault_secret"])
         sender_details["password"] = secret.value
 
@@ -119,7 +113,7 @@ def main(req):
     email_parameters = parse_request(req)
 
     sender_details = SenderDB(
-        conn_str=os.environ["AzureWebJobsStorage"],
+        conn_str=environ["AzureWebJobsStorage"],
         share_name="email-app",
         file_path="emails.json",
     ).get_sender(email_parameters["user"])
