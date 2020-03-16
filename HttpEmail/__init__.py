@@ -133,7 +133,7 @@ def parse_request(req):
     - recipients (mandatory): Comma separated list of recipiients.
     - body (optional default: empty)
     """
-    param_names = ["user", "subject", "recipients", "body"]
+    param_names = ["user", "subject", "recipients", "body", "mimetype"]
     email_parameters = {k: get_param(req, k) for k in param_names}
     logging.info(f"The incoming parameters are: {email_parameters}")
 
@@ -148,10 +148,13 @@ def parse_request(req):
         logging.info("Failed delivery. No sender user specified.")
         raise KeyError("Sender user was not specified in request.")
 
+    # Set the default parameters
     if not email_parameters["body"]:
         email_parameters["body"] = ""
     if not email_parameters["subject"]:
         email_parameters["subject"] = ""
+    if not email_parameters["mimetype"]:
+        email_parameters["mimetype"] = "plain"
 
     return email_parameters
 
@@ -178,13 +181,13 @@ class EmailDeliverer:
         self.password = password
         self.email = email
 
-    def send_email(self, recipients, subject, body):
+    def send_email(self, recipients, subject, body, mimetype):
         msg = MIMEMultipart()
         msg["From"] = self.email
         msg["To"] = ",".join(recipients)
         msg["Subject"] = subject
         msg["Date"] = formatdate(localtime=True)
-        msg.attach(MIMEText(body))
+        msg.attach(MIMEText(body, mimetype))
 
         server = smtplib.SMTP(self.host, self.port)
         server.starttls()
@@ -216,6 +219,7 @@ def main(req):
         recipients=email_parameters["recipients"],
         subject=email_parameters["subject"],
         body=email_parameters["body"],
+        mimetype=email_parameters["mimetype"],
     )
 
     return func.HttpResponse("{}")
